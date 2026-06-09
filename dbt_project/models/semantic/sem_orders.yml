@@ -1,0 +1,196 @@
+# models/semantic/sem_orders.yml
+# ─────────────────────────────────────────────────────────────────
+# MetricFlow Semantic Model: Orders
+# Anchor table: marts.fct_orders
+# Grain: one row per order
+#
+# This file defines the governed semantic layer consumed by:
+#   - BI tools (Tableau, Sigma, Hex)
+#   - Agentic AI systems via Snowflake Horizon Catalog / MCP
+#   - Internal analysts via MetricFlow CLI
+# ─────────────────────────────────────────────────────────────────
+
+semantic_models:
+  - name: orders
+    description: >
+      Core semantic model for all order activity.
+      Every metric related to revenue, volume, and customer behaviour
+      is anchored here. Consumed by agentic systems via the Semantic
+      Layer API and Snowflake Horizon Catalog semantic views.
+    model: ref('fct_orders')
+
+    # ── Entities ────────────────────────────────────────────────
+    # Entities are the join keys that let MetricFlow traverse
+    # relationships between semantic models at query time.
+    entities:
+      - name: order
+        type: primary
+        expr: order_id
+
+      - name: customer
+        type: foreign
+        expr: customer_id
+
+      - name: product
+        type: foreign
+        expr: product_id
+
+    # ── Measures ────────────────────────────────────────────────
+    # Measures are the aggregatable facts. MetricFlow generates
+    # correct SQL for each aggregation type automatically.
+    measures:
+      - name: revenue
+        description: Total order value in USD. Used in all revenue metrics.
+        agg: sum
+        expr: order_amount_usd
+
+      - name: order_count
+        description: Count of distinct orders placed.
+        agg: count_distinct
+        expr: order_id
+
+      - name: units_sold
+        description: Total product units sold across all orders.
+        agg: sum
+        expr: order_quantity
+
+      - name: customers_with_orders
+        description: >
+          Count of distinct customers who placed at least one order.
+          Used to compute per-customer metrics and active customer counts.
+        agg: count_distinct
+        expr: customer_id
+
+    # ── Dimensions ──────────────────────────────────────────────
+    # Dimensions are slicing attributes. Agents and BI tools use
+    # these to filter, group, and compare metrics.
+    dimensions:
+      - name: order_date
+        type: time
+        type_params:
+          time_granularity: day
+        description: Date the order was placed. Primary time axis for all metrics.
+
+      - name: order_status
+        type: categorical
+        description: >
+          Fulfilment status: pending, confirmed, shipped, delivered, cancelled.
+
+      - name: region
+        type: categorical
+        description: Geographic region of the order.
+
+      - name: acquisition_channel
+        type: categorical
+        description: Channel through which the customer was acquired (organic, paid, referral).
+
+      - name: customer_plan_type
+        type: categorical
+        description: Subscription plan of the ordering customer (free, starter, pro, enterprise).
+
+      - name: customer_country
+        type: categorical
+        description: Country of the ordering customer.
+
+
+# ─────────────────────────────────────────────────────────────────
+# Metrics
+# All metrics are defined against the orders semantic model above.
+# MetricFlow resolves joins, time grains, and filters at query time.
+# ─────────────────────────────────────────────────────────────────
+
+metrics:
+
+  # ── Simple metrics ─────────────────────────────────────────────
+
+  - name: total_revenue
+    description: >
+      Total order revenue in USD. Single authoritative definition
+      used by finance, BI, and agentic systems alike.
+    type: simple
+    type_params:
+      measure: revenue
+    filter: |
+      {{ Dimension('order__order_status') }} != 'cancelled'
+
+  - name: order_volume
+    description: Total number of confirmed orders placed.
+    type: simple
+    type_params:
+      measure: order_count
+    filter: |
+      {{ Dimension('order__order_status') }} != 'cancelled'
+
+  - name: units_sold
+    description: Total product units sold in confirmed orders.
+    type: simple
+    type_params:
+      measure: units_sold
+    filter: |
+      {{ Dimension('order__order_status') }} != 'cancelled'
+
+  - name: active_customers
+    description: >
+      Number of distinct customers who placed at least one confirmed order
+      in the selected period.
+    type: simple
+    type_params:
+      measure: customers_with_orders
+    filter: |
+      {{ Dimension('order__order_status') }} != 'cancelled'
+
+  # ── Ratio metrics ──────────────────────────────────────────────
+
+  - name: average_order_value
+    description: >
+      Average revenue per confirmed order (AOV).
+      Canonical definition: total_revenue / order_volume.
+    type: ratio
+    type_params:
+      numerator: total_revenue
+      denominator: order_volume
+
+  - name: revenue_per_customer
+    description: Average revenue generated per distinct ordering customer.
+    type: ratio
+    type_params:
+      numerator: total_revenue
+      denominator: active_customers
+
+  # ── Cumulative metrics ─────────────────────────────────────────
+
+  - name: cumulative_revenue_mtd
+    description: Month-to-date cumulative revenue. Resets at the start of each month.
+    type: cumulative
+    type_params:
+      measure: revenue
+      window: 1 month
+      filter: |
+        {{ Dimension('order__order_status') }} != 'cancelled'
+
+  - name: cumulative_orders_mtd
+    description: Month-to-date cumulative order count.
+    type: cumulative
+    type_params:
+      measure: order_count
+      window: 1 month
+      filter: |
+        {{ Dimension('order__order_status') }} != 'cancelled'
+
+  # ── Derived metrics ────────────────────────────────────────────
+
+  - name: revenue_growth_wow
+    description: >
+      Week-over-week revenue growth rate.
+      Positive values indicate growth; negative indicates decline.
+      Used by agentic systems for trend detection and alerting.
+    type: derived
+    type_params:
+      expr: "(current_week_revenue - prior_week_revenue) / nullif(prior_week_revenue, 0)"
+      metrics:
+        - name: total_revenue
+          alias: current_week_revenue
+          offset_window: 0 weeks
+        - name: total_revenue
+          alias: prior_week_revenue
+          offset_window: 1 week

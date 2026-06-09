@@ -1,0 +1,127 @@
+# docs/horizon_catalog_semantic_views.yml
+# ─────────────────────────────────────────────────────────────────
+# Snowflake Horizon Catalog — Semantic View Definitions
+#
+# These views expose governed metric definitions to Snowflake
+# Horizon Catalog, making them discoverable and queryable by:
+#   - Snowflake CoCo (natural language query agent)
+#   - External agents via MCP (Claude, Cursor, custom frameworks)
+#   - Snowflake Cortex Analyst
+#   - BI tools via Horizon Context integration
+#
+# Reference: https://docs.snowflake.com/en/user-guide/snowflake-horizon
+# ─────────────────────────────────────────────────────────────────
+
+semantic_views:
+
+  - name: sv_revenue_metrics
+    description: >
+      Governed revenue metrics for the organisation.
+      Authoritative source of truth for total_revenue, AOV, and
+      revenue growth consumed by finance dashboards and AI agents.
+    schema: ANALYTICS.SEMANTIC
+    refresh: on_demand
+
+    metrics:
+      - dbt_metric: total_revenue
+        display_name: Total Revenue (USD)
+        description: Sum of confirmed order revenue, excluding cancellations.
+        format: currency
+        currency: USD
+
+      - dbt_metric: average_order_value
+        display_name: Average Order Value (USD)
+        description: Revenue per confirmed order. Use for pricing and basket analysis.
+        format: currency
+        currency: USD
+
+      - dbt_metric: revenue_growth_wow
+        display_name: Revenue Growth WoW (%)
+        description: >
+          Week-over-week revenue growth rate. Positive = growth, negative = decline.
+          Surfaced in agentic alerts and executive summaries.
+        format: percentage
+
+      - dbt_metric: cumulative_revenue_mtd
+        display_name: Revenue MTD (USD)
+        description: Month-to-date cumulative revenue. Resets at month start.
+        format: currency
+        currency: USD
+
+    dimensions:
+      - name: order_date
+        description: Date the order was placed.
+      - name: region
+        description: Geographic region.
+      - name: customer_plan_type
+        description: Customer subscription tier.
+      - name: acquisition_channel
+        description: Channel through which the customer was acquired.
+
+    governance:
+      owner: data_engineering
+      steward: analytics@company.com
+      data_classification: internal
+      row_access_policy: none
+      column_masking: none
+
+  - name: sv_customer_metrics
+    description: >
+      Governed customer activity metrics.
+      Used by agentic CRM systems, churn models, and growth dashboards.
+    schema: ANALYTICS.SEMANTIC
+    refresh: on_demand
+
+    metrics:
+      - dbt_metric: active_customers
+        display_name: Active Customers
+        description: Distinct customers with at least one confirmed order in the period.
+        format: integer
+
+      - dbt_metric: revenue_per_customer
+        display_name: Revenue per Customer (USD)
+        description: Average revenue generated per ordering customer.
+        format: currency
+        currency: USD
+
+    dimensions:
+      - name: order_date
+      - name: customer_country
+      - name: customer_plan_type
+
+    governance:
+      owner: data_engineering
+      steward: analytics@company.com
+      data_classification: internal
+
+  - name: sv_operational_metrics
+    description: >
+      Order volume and fulfilment metrics for operations and supply chain agents.
+    schema: ANALYTICS.SEMANTIC
+    refresh: on_demand
+
+    metrics:
+      - dbt_metric: order_volume
+        display_name: Order Volume
+        description: Count of confirmed orders placed.
+        format: integer
+
+      - dbt_metric: units_sold
+        display_name: Units Sold
+        description: Total product units shipped in confirmed orders.
+        format: integer
+
+      - dbt_metric: cumulative_orders_mtd
+        display_name: Orders MTD
+        description: Month-to-date cumulative confirmed order count.
+        format: integer
+
+    dimensions:
+      - name: order_date
+      - name: region
+      - name: order_status
+
+    governance:
+      owner: data_engineering
+      steward: ops@company.com
+      data_classification: internal
