@@ -4,7 +4,7 @@
 
 A production-pattern implementation of a dbt MetricFlow semantic layer with Snowflake Horizon Catalog integration and a FastAPI agentic query interface.
 
-> Built as a reference architecture for teams moving from "AI querying raw tables" to "AI querying governed, version-controlled business logic."
+> A production-ready pattern for teams moving from "AI querying raw tables" to "AI querying governed, version-controlled business logic." Includes migration strategy for existing dbt projects, Horizon Catalog governance configuration, and a production readiness checklist.
 
 ---
 
@@ -160,7 +160,9 @@ snowflake-semantic-agent/
 │   └── main.py                             # FastAPI semantic layer agent
 │
 ├── docs/
-│   └── horizon_catalog_semantic_views.yml  # Horizon Catalog semantic view definitions
+│   ├── horizon_catalog_semantic_views.yml  # Horizon Catalog semantic view definitions
+│   ├── migration_guide.md                  # How to adopt MetricFlow on an existing dbt project
+│   └── production_readiness.md             # Pre-launch checklist for production deployment
 │
 ├── .env.example
 └── requirements.txt
@@ -243,6 +245,16 @@ Deploying this architecture delivers measurable value across three areas:
 **Analyst capacity** — The long tail of metric queries ("What's MTD revenue for EMEA pro-tier customers?") is handled by the agent layer. Analysts focus on questions that require judgment, not SQL.
 
 **AI readiness** — Agents that query raw tables are fragile and unauditable. This architecture makes your Snowflake data agent-safe: governed, logged, and traceable to a specific metric version.
+
+---
+
+## Production Docs
+
+This repository includes two documents that address the real concerns of deploying a semantic layer in an existing enterprise environment.
+
+**[Migration Guide](docs/migration_guide.md)** — How to introduce MetricFlow into an existing dbt project without disrupting current pipelines. Covers the full phased approach: audit, time spine, first semantic model, metric migration from legacy dbt metrics, Horizon Catalog registration, and agent consumption. Includes a table of common org constraints (multiple dbt projects, OSS dbt Core, Snowflake permission issues) and how to handle each.
+
+**[Production Readiness Checklist](docs/production_readiness.md)** — Eight areas to sign off before connecting agentic systems to a production Semantic Layer: semantic model correctness, metric parity validation, governance configuration, API security, agent safety, versioning, monitoring, and rollback readiness. Built to be used as an actual gate, with a sign-off table per area.
 
 ---
 
