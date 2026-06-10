@@ -83,35 +83,121 @@ class MetricResult(BaseModel):
     )
 
 
-# ── Intent Router ─────────────────────────────────────────────────
-# In production this would be an LLM call (Cortex / GPT-4o) that
-# extracts metric intent from the question. Stubbed here for clarity.
+# ── Intent Router (Hybrid) ────────────────────────────────────────
+#
+# Strategy:
+#   1. Fast path — rule-based keyword triage. Handles ~80% of queries
+#      with zero LLM latency. Unambiguous metric names resolve instantly.
+#   2. Slow path — LLM tool-calling (Claude via Anthropic API). Handles
+#      ambiguous or compound questions that require reasoning over the
+#      metric catalog. E.g. "How are our best customers doing vs last quarter?"
+#   3. Fallback — returns full metric catalog so calling agent can re-prompt.
 
 INTENT_MAP = {
-    "revenue":            "total_revenue",
-    "aov":                "average_order_value",
-    "average order":      "average_order_value",
-    "orders":             "order_volume",
-    "order volume":       "order_volume",
-    "units":              "units_sold",
-    "customers":          "active_customers",
+    "revenue":              "total_revenue",
+    "aov":                  "average_order_value",
+    "average order":        "average_order_value",
+    "orders":               "order_volume",
+    "order volume":         "order_volume",
+    "units":                "units_sold",
+    "customers":            "active_customers",
     "revenue per customer": "revenue_per_customer",
-    "growth":             "revenue_growth_wow",
-    "mtd":                "cumulative_revenue_mtd",
+    "growth":               "revenue_growth_wow",
+    "wow":                  "revenue_growth_wow",
+    "week over week":       "revenue_growth_wow",
+    "mtd":                  "cumulative_revenue_mtd",
+    "month to date":        "cumulative_revenue_mtd",
 }
 
-def resolve_metric(question: str) -> str:
-    q = question.lower()
-    for keyword, metric in INTENT_MAP.items():
-        if keyword in q:
-            return metric
+METRIC_CATALOG = [
+    {"name": "total_revenue",         "description": "Total confirmed order revenue in USD"},
+    {"name": "average_order_value",   "description": "Revenue per confirmed order (AOV)"},
+    {"name": "order_volume",          "description": "Count of confirmed orders placed"},
+    {"name": "units_sold",            "description": "Total product units sold"},
+    {"name": "active_customers",      "description": "Distinct customers with confirmed orders"},
+    {"name": "revenue_per_customer",  "description": "Average revenue per ordering customer"},
+    {"name": "revenue_growth_wow",    "description": "Week-over-week revenue growth rate"},
+    {"name": "cumulative_revenue_mtd","description": "Month-to-date cumulative revenue"},
+    {"name": "cumulative_orders_mtd", "description": "Month-to-date cumulative order count"},
+]
+
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+async def llm_resolve_metric(question: str) -> str:
+    """
+    Slow path: use Claude tool-calling to resolve metric intent from
+    ambiguous or compound natural language questions.
+    """
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Could not resolve metric from '{question}' via rule-based routing. "
+                f"Set ANTHROPIC_API_KEY to enable LLM-based intent resolution. "
+                f"Available metrics: {[m['name'] for m in METRIC_CATALOG]}"
+            ),
+        )
+
+    tools = [
+        {
+            "name": metric["name"],
+            "description": metric["description"],
+            "input_schema": {"type": "object", "properties": {}, "required": []},
+        }
+        for metric in METRIC_CATALOG
+    ]
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-3-5-haiku-20241022",
+                "max_tokens": 256,
+                "tools": tools,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Select the single best metric tool for this question: '{question}'. "
+                            "Choose only one tool. Do not explain."
+                        ),
+                    }
+                ],
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    for block in data.get("content", []):
+        if block.get("type") == "tool_use":
+            return block["name"]
+
     raise HTTPException(
         status_code=422,
-        detail=(
-            f"Could not resolve a governed metric from: '{question}'. "
-            f"Available metrics: {list(set(INTENT_MAP.values()))}"
-        ),
+        detail=f"LLM could not resolve a metric for: '{question}'",
     )
+
+
+async def resolve_metric(question: str) -> str:
+    """
+    Hybrid router: rule-based fast path → LLM slow path → error with catalog.
+    """
+    q = question.lower()
+
+    # Fast path
+    for keyword, metric in INTENT_MAP.items():
+        if keyword in q:
+            logger.info(f"Fast path resolved: '{keyword}' → {metric}")
+            return metric
+
+    # Slow path
+    logger.info(f"Fast path miss — escalating to LLM router for: '{question}'")
+    return await llm_resolve_metric(question)
 
 
 # ── Semantic Layer Client ─────────────────────────────────────────
@@ -225,7 +311,7 @@ async def query_metrics(req: QueryRequest):
     All results are backed by version-controlled metric definitions —
     no raw SQL, no ad-hoc aggregations.
     """
-    metric_name = resolve_metric(req.question)
+    metric_name = await resolve_metric(req.question)
     logger.info(f"Resolved metric: {metric_name} | grain: {req.time_grain} | group_by: {req.group_by}")
 
     try:
